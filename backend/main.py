@@ -249,6 +249,7 @@ class AddBilibiliQueueRequest(BaseModel):
     cover_url: str = ""
     page: int | None = None
     cid: int | None = None
+    include_all_pages: bool = False
     play_now: bool = False
 
 
@@ -1473,10 +1474,10 @@ def _extract_bilibili_page(value: object) -> int | None:
         match = re.search(r"(?:^|[?&])p=(\d+)(?:&|$)", raw, re.IGNORECASE)
         candidate = match.group(1) if match else None
     try:
-        page = int(candidate) if candidate is not None else 1
+        page = int(candidate) if candidate is not None else None
     except (TypeError, ValueError):
         return None
-    return page if page > 0 else None
+    return page if page is not None and page > 0 else None
 
 
 def _normalize_bilibili_reference(
@@ -1516,7 +1517,7 @@ def _build_bilibili_video_url(video_id: str, *, page: int | None = None) -> str:
     if raw.isdigit():
         raw = f"av{raw}"
     if raw.lower().startswith("av"):
-        return f"https://www.bilibili.com/video/{raw.lower()}"
+        raw = raw.lower()
     if raw.lower().startswith("bv"):
         raw = f"BV{raw[2:]}"
     suffix = f"?p={max(1, int(page))}" if page is not None and int(page) > 1 else ""
@@ -1740,8 +1741,10 @@ def _normalize_bilibili_view_data(
                 break
     page_duration_s = _coerce_positive_int(selected_page.get("duration"))
     total_duration_s = _coerce_positive_int(view_data.get("duration"))
+    # 顶层 duration 是整条视频的总时长，不能作为多分 P 中某一 P 的时长。
+    single_page = isinstance(pages, list) and len(pages) <= 1
     duration_ms = page_duration_s * 1000 if page_duration_s is not None else (
-        total_duration_s * 1000 if total_duration_s is not None else None
+        total_duration_s * 1000 if total_duration_s is not None and single_page and page == 1 else None
     )
 
     owner = view_data.get("owner") if isinstance(view_data.get("owner"), dict) else {}
@@ -3790,6 +3793,102 @@ async def _enqueue_bilibili_song(
         session.close()
 
 
+async def _enqueue_bilibili_video_pages(req: AddBilibiliQueueRequest) -> dict:
+    video_id = _extract_bilibili_video_id(req.video_id)
+    if not video_id:
+        raise HTTPException(status_code=400, detail="invalid bilibili video_id")
+
+    play_request_generation = await _begin_play_request() if req.play_now else None
+    try:
+        view_data = await asyncio.to_thread(_fetch_bilibili_view_sync, video_id)
+        pages = view_data.get("pages") if isinstance(view_data, dict) else None
+        if not isinstance(pages, list) or not pages:
+            raise HTTPException(status_code=502, detail="无法获取 B 站分 P 列表，未添加到队列")
+
+        tracks = []
+        seen_pages: set[int] = set()
+        seen_cids: set[int] = set()
+        requested_page = req.page if req.page is not None else _extract_bilibili_page(req.video_id)
+        requested_cid = _coerce_positive_int(req.cid)
+        selected_pages = pages
+        if req.cid is not None or requested_page is not None:
+            key, value = ("cid", requested_cid) if req.cid is not None else ("page", requested_page)
+            selected_pages = [
+                entry for entry in pages
+                if isinstance(entry, dict) and _coerce_positive_int(entry.get(key)) == value
+            ]
+            if len(selected_pages) != 1 or (req.cid is not None and requested_cid is None):
+                raise HTTPException(status_code=400, detail="指定的 B 站分 P 不存在")
+            if requested_page is not None and _coerce_positive_int(selected_pages[0].get("page")) != requested_page:
+                raise HTTPException(status_code=400, detail="B 站 page 与 cid 不匹配")
+
+        for page_data in selected_pages:
+            if not isinstance(page_data, dict):
+                raise HTTPException(status_code=502, detail="B 站分 P 信息不完整，未添加到队列")
+            page = _coerce_positive_int(page_data.get("page"))
+            cid = _coerce_positive_int(page_data.get("cid"))
+            duration_s = _coerce_positive_int(page_data.get("duration"))
+            if page is None or cid is None or duration_s is None or page in seen_pages or cid in seen_cids:
+                raise HTTPException(status_code=502, detail="B 站分 P 编号、CID 或时长无效，未添加到队列")
+            seen_pages.add(page)
+            seen_cids.add(cid)
+            metadata = _normalize_bilibili_view_data(view_data, fallback_video_id=video_id, page=page, cid=cid)
+            if metadata is None:
+                raise HTTPException(status_code=502, detail="无法解析 B 站分 P 信息，未添加到队列")
+            title = req.title.strip() or metadata["title"]
+            if len(pages) > 1:
+                part = _clean_bilibili_text(page_data.get("part") or "")
+                title = f"{title} - P{page}" + (f" {part}" if part else "")
+            duration_ms = duration_s * 1000
+            _ensure_bilibili_duration_allowed(duration_ms, video_id=video_id, title=title)
+            tracks.append({
+                "page": page, "cid": cid, "title": title, "duration_ms": duration_ms,
+                "artist": req.artist or metadata["artist"],
+                "album": req.album or metadata["album"],
+                "artwork_url": req.cover_url or metadata["artwork_url"],
+            })
+        tracks.sort(key=lambda track: track["page"])
+        if selected_pages is pages and seen_pages != set(range(1, len(pages) + 1)):
+            raise HTTPException(status_code=502, detail="B 站分 P 列表不完整，未添加到队列")
+
+        source_url = ""
+        if req.play_now:
+            first = tracks[0]
+            source_url, _, _, _, _ = await _resolve_bilibili_playback_payload(
+                video_id=video_id, page=first["page"], cid=first["cid"],
+                artist=first["artist"], album=first["album"], artwork_url=first["artwork_url"],
+                duration_ms=first["duration_ms"],
+            )
+            if not await _is_play_request_current(play_request_generation):
+                raise HTTPException(status_code=409, detail="bilibili playback request was superseded by a newer command")
+
+        session = new_session()
+        try:
+            position = _next_queue_position(session)
+            items = [QueueItem(
+                position=position + index, track_id=f"bilibili:{video_id}",
+                title=track["title"], artist=track["artist"], album=track["album"],
+                duration=track["duration_ms"], cover_url=track["artwork_url"],
+                source_url=source_url if index == 0 else "",
+                source_page=track["page"], source_cid=track["cid"],
+            ) for index, track in enumerate(tracks)]
+            session.add_all(items)
+            session.commit()
+            ids = [int(item.id) for item in items]
+            _schedule_ts_description_update()
+            if req.play_now:
+                await _start_resolved_queue_item(
+                    session, items[0], source_url=source_url, requested_by="web",
+                    request_generation=play_request_generation,
+                )
+            return {"ok": True, "id": ids[0], "ids": ids, "count": len(ids), "trial": False}
+        finally:
+            session.close()
+    finally:
+        if play_request_generation is not None:
+            await _clear_pending_play_request(request_generation=play_request_generation)
+
+
 async def _handle_chat_command(
     invoker_name: str,
     message: str,
@@ -4955,6 +5054,8 @@ async def add_queue_qqmusic(req: AddQQMusicQueueRequest) -> dict:
 @app.post("/queue/bilibili")
 async def add_queue_bilibili(req: AddBilibiliQueueRequest) -> dict:
     try:
+        if req.include_all_pages or req.page is not None or req.cid is not None:
+            return await _enqueue_bilibili_video_pages(req)
         item_id, trial = await _enqueue_bilibili_song(
             video_id=req.video_id,
             title=req.title,

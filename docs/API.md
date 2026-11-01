@@ -646,8 +646,7 @@ curl -X POST "http://127.0.0.1:8009/external/queue" \
   "album": "音乐综合",
   "duration_ms": 6555000,
   "cover_url": "https://i0.hdslb.com/...",
-  "page": 2,
-  "cid": 123456789,
+  "include_all_pages": true,
   "play_now": true
 }
 ```
@@ -655,9 +654,19 @@ curl -X POST "http://127.0.0.1:8009/external/queue" \
 说明：
 
 - `video_id` 支持 BV 号、av 号，或包含这两者的 B 站视频 URL
-- `page` 默认为 1；视频 URL 中的 `?p=N` 也会自动识别
-- `cid` 可用于精确指定分 P，后端会校验它属于该视频
+- 搜索页默认传 `include_all_pages: true`，按 P1、P2……顺序将全部分 P 作为独立歌曲加入队列；`play_now: true` 时播放 P1，其余分 P 排队
+- 每首歌保存对应分 P 的编号、CID、标题和时长（将详情中该 P 的秒数转换为毫秒），不使用搜索结果中的总时长；时长上限也逐 P 校验
+- 分 P 列表或时长获取失败时整批添加失败，不会只添加 P1 或留下部分队列项
+- `page` / `cid` 可用于只添加指定分 P；视频 URL 中的 `?p=N` 也会自动识别，并校验它属于该视频及 `page` 与 `cid` 是否一致
+- 不传 `include_all_pages`、`page`、`cid` 时保留原有单 P1 入队行为
+- 展开或指定分 P 时返回 `ids`（新增队列 ID 列表）和 `count`（歌曲数量），`id` 为第一首歌的队列 ID
 - 实际播放前会先将音频下载到服务端本地缓存，再交给 `voice-service`
+
+展开响应示例：
+
+```json
+{"ok": true, "id": 88, "ids": [88, 89, 90], "count": 3, "trial": false}
+```
 
 ### 6.4 `POST /queue`
 

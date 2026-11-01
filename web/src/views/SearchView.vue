@@ -238,6 +238,8 @@ function selectHotSearch(hotItem: any) {
   search()
 }
 
+type BilibiliQueueResponse = { ok: boolean; id: number; ids?: number[]; count?: number; trial?: boolean }
+
 async function enqueue(song: any, playNow: boolean) {
   error.value = ''
   status.value = ''
@@ -248,17 +250,21 @@ async function enqueue(song: any, playNow: boolean) {
         throw new Error('未找到 B 站视频 ID')
       }
 
-      const res = await apiPost<{ ok: boolean; id: number; trial?: boolean }>('/queue/bilibili', {
+      const page = bilibiliPageOverrides.value[getSongKey(song)]
+      const res = await apiPost<BilibiliQueueResponse>('/queue/bilibili', {
         video_id: videoId,
         title: getSongTitle(song) || videoId,
         artist: getSongArtist(song),
         album: getSongAlbum(song),
         play_now: playNow,
         cover_url: getSongArtwork(song),
-        duration_ms: getSongDurationMs(song),
-        page: getBilibiliPage(song),
+        include_all_pages: !page,
+        page,
       })
-      status.value = `已添加到播放队列 #${res.id}${playNow ? ' (正在播放)' : ''}`
+      const count = res.count || 1
+      status.value = count > 1
+        ? `已添加 ${count} 首分 P 歌曲${playNow ? ' (正在播放 P1)' : ''}`
+        : `已添加到播放队列 #${res.id}${playNow ? ' (正在播放)' : ''}`
     } else if (selectedPlatform.value === 'qqmusic') {
       const res = await apiPost<{ ok: boolean; id: number; source_url: string }>('/queue/qqmusic', {
         song_mid: String(song.mid || song.songmid),
@@ -824,16 +830,18 @@ onMounted(() => {
               </div>
 
               <label v-if="selectedPlatform === 'bilibili'" class="flex items-center gap-2 text-xs text-gray-500 mb-4">
-                <span>P</span>
+                <span>分 P</span>
                 <input
                   type="number"
                   min="1"
                   step="1"
-                  :value="getBilibiliPage(song) || 1"
+                  :value="bilibiliPageOverrides[getSongKey(song)] ?? ''"
+                  placeholder="全部"
                   @input="setBilibiliPage(song, $event)"
                   class="w-16 rounded-md border border-gray-200 px-2 py-1 text-center text-xs text-gray-700"
-                  title="播放视频分 P"
+                  title="默认添加全部分 P；填写编号可只添加指定 P"
                 />
+                <span>默认全部，每 P 一首</span>
               </label>
 
               <!-- Actions -->
