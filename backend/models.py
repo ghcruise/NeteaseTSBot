@@ -56,6 +56,7 @@ class QueueItem(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=beijing_now, index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False, index=True)
 
     track_id: Mapped[str] = mapped_column(String(64), index=True)
     title: Mapped[str] = mapped_column(String(255))
@@ -64,6 +65,8 @@ class QueueItem(Base):
     duration: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cover_url: Mapped[str] = mapped_column(Text, default="")
     source_url: Mapped[str] = mapped_column(Text)
+    source_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_cid: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class HistoryItem(Base):
@@ -80,3 +83,5 @@ class HistoryItem(Base):
     cover_url: Mapped[str] = mapped_column(Text, default="")
     source_url: Mapped[str] = mapped_column(Text)
     requested_by: Mapped[str] = mapped_column(String(64), default="")
+    source_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_cid: Mapped[int | None] = mapped_column(Integer, nullable=True)

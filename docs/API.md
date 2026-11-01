@@ -88,6 +88,8 @@ x-netease-cookie: <cookie字符串>
 | `song_mid` | string | QQ 音乐歌曲 MID，仅 `qqmusic` 时返回 |
 | `video_id` | string | B 站视频 ID，仅 `bilibili` 时返回 |
 | `webpage_url` | string | 原始视频页，仅 `bilibili` 时返回 |
+| `page` | integer \| null | B 站视频分 P，默认为 1 |
+| `cid` | integer \| null | B 站视频分 P 的播放 CID |
 | `title` | string | 标题 |
 | `artist` | string | 艺术家 |
 | `album` | string | 专辑名 |
@@ -116,6 +118,8 @@ x-netease-cookie: <cookie字符串>
 | `artwork` | string | 封面图 URL |
 | `source_url` | string | 实际播放 URL |
 | `requested_by` | string | 请求来源，例如 `web`、`external_api`、聊天点歌者昵称 |
+| `page` | integer \\| null | B 站视频分 P，默认为 1 |
+| `cid` | integer \\| null | B 站视频分 P 的播放 CID |
 
 ### 3.3 LyricsResponse
 
@@ -573,6 +577,7 @@ curl -X POST "http://127.0.0.1:8009/external/queue" \
 | `POST` | `/queue/qqmusic` | QQ 音乐歌曲入队 |
 | `POST` | `/queue/bilibili` | B 站视频入队并在播放时下载音频 |
 | `GET` | `/queue` | 获取队列 |
+| `POST` | `/queue/reorder` | 按队列 ID 保存播放顺序 |
 | `DELETE` | `/queue` | 清空队列 |
 | `POST` | `/queue` | 通用低层入队 |
 | `DELETE` | `/queue/{item_id}` | 删除队列项 |
@@ -641,6 +646,8 @@ curl -X POST "http://127.0.0.1:8009/external/queue" \
   "album": "音乐综合",
   "duration_ms": 6555000,
   "cover_url": "https://i0.hdslb.com/...",
+  "page": 2,
+  "cid": 123456789,
   "play_now": true
 }
 ```
@@ -648,6 +655,8 @@ curl -X POST "http://127.0.0.1:8009/external/queue" \
 说明：
 
 - `video_id` 支持 BV 号、av 号，或包含这两者的 B 站视频 URL
+- `page` 默认为 1；视频 URL 中的 `?p=N` 也会自动识别
+- `cid` 可用于精确指定分 P，后端会校验它属于该视频
 - 实际播放前会先将音频下载到服务端本地缓存，再交给 `voice-service`
 
 ### 6.4 `POST /queue`

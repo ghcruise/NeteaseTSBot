@@ -18,6 +18,21 @@ from backend.models import QueueItem
 
 
 class BilibiliAudioCacheTests(unittest.TestCase):
+    def test_bilibili_page_reference_selects_requested_cid_and_cache_key(self) -> None:
+        view_data = {
+            "bvid": "BVTEST",
+            "pages": [
+                {"page": 1, "cid": 101, "duration": 10},
+                {"page": 2, "cid": 202, "duration": 20},
+            ],
+        }
+
+        self.assertEqual(2, main._extract_bilibili_page("https://www.bilibili.com/video/BVTEST?p=2"))
+        self.assertEqual(202, main._resolve_bilibili_primary_cid(view_data, page=2))
+        self.assertEqual(202, main._resolve_bilibili_primary_cid(view_data, cid=202))
+        self.assertEqual("BVTEST-p1", main._bilibili_cache_key("BVTEST", page=1))
+        self.assertEqual("BVTEST-p2", main._bilibili_cache_key("BVTEST", page=2, cid=202))
+
     def test_cache_lookup_removes_expired_audio_and_stale_partial_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cache_dir = Path(tmp)
@@ -41,6 +56,32 @@ class BilibiliAudioCacheTests(unittest.TestCase):
             self.assertEqual("", cached)
             self.assertFalse(audio_path.exists())
             self.assertFalse(partial_path.exists())
+
+
+class QueueReorderTests(unittest.TestCase):
+    def test_reorder_persists_position_and_rejects_non_permutations(self) -> None:
+        engine = create_engine("sqlite:///:memory:")
+        self.addCleanup(engine.dispose)
+        Base.metadata.create_all(engine)
+        sessions = sessionmaker(bind=engine)
+        with sessions() as session:
+            session.add_all(
+                QueueItem(id=item_id, position=index, track_id=f"test:{item_id}", title=str(item_id), source_url="")
+                for index, item_id in enumerate([1, 2, 3], start=1)
+            )
+            session.commit()
+
+            with patch.object(main, "_schedule_ts_description_update"):
+                result = main.reorder_queue(main.QueueReorderRequest(track_ids=[3, 1, 2]), session)
+            self.assertEqual([3, 1, 2], result["track_ids"])
+            ordered = session.execute(
+                select(QueueItem.id).order_by(QueueItem.position.asc(), QueueItem.id.asc())
+            ).scalars().all()
+            self.assertEqual([3, 1, 2], ordered)
+
+            with self.assertRaises(HTTPException) as raised:
+                main.reorder_queue(main.QueueReorderRequest(track_ids=[1, 1, 2]), session)
+            self.assertEqual(400, raised.exception.status_code)
 
     def test_cache_lookup_evicts_oldest_audio_when_size_limit_is_exceeded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

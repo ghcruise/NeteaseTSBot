@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 import os
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
@@ -31,6 +31,28 @@ def create_db_and_tables() -> None:
     from . import models  # noqa: F401
 
     Base.metadata.create_all(_engine)
+    inspector = inspect(_engine)
+    table_names = inspector.get_table_names()
+    if "queue_items" not in table_names:
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("queue_items")}
+    with _engine.begin() as connection:
+        if "position" not in columns:
+            connection.execute(text("ALTER TABLE queue_items ADD COLUMN position INTEGER NOT NULL DEFAULT 0"))
+        if "source_page" not in columns:
+            connection.execute(text("ALTER TABLE queue_items ADD COLUMN source_page INTEGER"))
+        if "source_cid" not in columns:
+            connection.execute(text("ALTER TABLE queue_items ADD COLUMN source_cid INTEGER"))
+        connection.execute(text("UPDATE queue_items SET position = id WHERE position = 0"))
+
+    if "history_items" in table_names:
+        history_columns = {column["name"] for column in inspector.get_columns("history_items")}
+        with _engine.begin() as connection:
+            if "source_page" not in history_columns:
+                connection.execute(text("ALTER TABLE history_items ADD COLUMN source_page INTEGER"))
+            if "source_cid" not in history_columns:
+                connection.execute(text("ALTER TABLE history_items ADD COLUMN source_cid INTEGER"))
 
 
 def new_session() -> Session:

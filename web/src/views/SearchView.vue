@@ -48,6 +48,7 @@ const hasMore = ref(false)
 const loadingMore = ref(false)
 
 const favoriteSongKeys = ref<Set<string>>(new Set())
+const bilibiliPageOverrides = ref<Record<string, number>>({})
 
 function refreshFavoriteSongIds() {
   favoriteSongKeys.value = new Set(getFavoriteSongs().map((song) => getFavoriteSongKey(song)).filter(Boolean))
@@ -255,6 +256,7 @@ async function enqueue(song: any, playNow: boolean) {
         play_now: playNow,
         cover_url: getSongArtwork(song),
         duration_ms: getSongDurationMs(song),
+        page: getBilibiliPage(song),
       })
       status.value = `已添加到播放队列 #${res.id}${playNow ? ' (正在播放)' : ''}`
     } else if (selectedPlatform.value === 'qqmusic') {
@@ -323,6 +325,31 @@ function getBilibiliVideoId(song: any): string {
   return value.toLowerCase().startsWith('bv') ? `BV${value.slice(2)}` : value.toLowerCase()
 }
 
+function getBilibiliPage(song: any): number | undefined {
+  const override = bilibiliPageOverrides.value[getSongKey(song)]
+  if (Number.isInteger(override) && override > 0) return override
+  const explicit = Number(song?.page || song?.p)
+  if (Number.isInteger(explicit) && explicit > 0) return explicit
+  const raw = String(song?.webpage_url || song?.arcurl || song?.url || '').trim()
+  try {
+    const value = new URL(raw).searchParams.get('p')
+    const page = Number(value)
+    return Number.isInteger(page) && page > 0 ? page : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function setBilibiliPage(song: any, event: Event) {
+  const page = Number((event.target as HTMLInputElement)?.value)
+  const key = getSongKey(song)
+  if (Number.isInteger(page) && page > 0) {
+    bilibiliPageOverrides.value[key] = page
+  } else {
+    delete bilibiliPageOverrides.value[key]
+  }
+}
+
 function getSongKey(song: any): string {
   return String(
     song?.track_id ||
@@ -387,11 +414,23 @@ function getSongWebpageUrl(song: any): string {
   if (selectedPlatform.value !== 'bilibili') return ''
 
   const raw = String(song?.webpage_url || song?.arcurl || song?.url || '').trim()
-  if (raw.startsWith('//')) return `https:${raw}`
-  if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
+  const page = getBilibiliPage(song)
+  if (raw.startsWith('//')) return appendBilibiliPage(`https:${raw}`, page)
+  if (raw.startsWith('http://') || raw.startsWith('https://')) return appendBilibiliPage(raw, page)
 
   const videoId = getBilibiliVideoId(song)
-  return videoId ? `https://www.bilibili.com/video/${videoId}` : ''
+  return videoId ? appendBilibiliPage(`https://www.bilibili.com/video/${videoId}`, page) : ''
+}
+
+function appendBilibiliPage(url: string, page?: number): string {
+  if (!page || page <= 1) return url
+  try {
+    const parsed = new URL(url)
+    parsed.searchParams.set('p', String(page))
+    return parsed.toString()
+  } catch {
+    return url
+  }
 }
 
 function parseMetricCount(value: any): number | null {
@@ -783,6 +822,19 @@ onMounted(() => {
                   <span>{{ formatCompactCount(getBilibiliMetric(song, 'coins')) }}</span>
                 </div>
               </div>
+
+              <label v-if="selectedPlatform === 'bilibili'" class="flex items-center gap-2 text-xs text-gray-500 mb-4">
+                <span>P</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  :value="getBilibiliPage(song) || 1"
+                  @input="setBilibiliPage(song, $event)"
+                  class="w-16 rounded-md border border-gray-200 px-2 py-1 text-center text-xs text-gray-700"
+                  title="播放视频分 P"
+                />
+              </label>
 
               <!-- Actions -->
               <div class="mt-auto flex items-center gap-2">

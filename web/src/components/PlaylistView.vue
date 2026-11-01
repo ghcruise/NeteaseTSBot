@@ -105,6 +105,7 @@
             @end="onDragEnd"
             class="space-y-1"
             handle=".drag-handle"
+            :disabled="Boolean(searchQuery)"
           >
             <div
               v-for="(track, index) in filteredTracks"
@@ -118,7 +119,7 @@
             >
               <!-- Drag handle & index -->
               <div class="flex items-center gap-2 w-8 md:w-10 flex-shrink-0 justify-center">
-                <div class="drag-handle cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 p-1">
+                <div :class="['drag-handle text-gray-300 hover:text-gray-500 p-1', searchQuery ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing']">
                   <GripVertical :size="16" />
                 </div>
               </div>
@@ -255,6 +256,7 @@ const searchQuery = ref('')
 const selectedTracks = ref<Set<number>>(new Set())
 const currentPlayingId = ref<number | null>(null)
 const isDragging = ref(false)
+const dragSnapshot = ref<Track[] | null>(null)
 let refreshTimer: number | null = null
 
 // Filter tracks based on search
@@ -403,19 +405,24 @@ async function toggleLike(track: Track) {
 // Handle drag end - reorder tracks
 function onDragStart() {
   isDragging.value = true
+  dragSnapshot.value = tracks.value.map(track => ({ ...track }))
 }
 
 function onDragEnd() {
   isDragging.value = false
-  // Update track order on server
-  updateTrackOrder()
+  void updateTrackOrder()
 }
 
 async function updateTrackOrder() {
   try {
     const trackIds = tracks.value.map(t => t.id)
     await apiPost('/queue/reorder', { track_ids: trackIds })
+    dragSnapshot.value = null
   } catch (e: any) {
+    if (dragSnapshot.value) {
+      tracks.value = dragSnapshot.value
+    }
+    dragSnapshot.value = null
     showActionError(`保存顺序失败: ${String(e?.message ?? e)}`)
   }
 }
